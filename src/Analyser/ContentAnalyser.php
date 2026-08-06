@@ -56,6 +56,7 @@ final class ContentAnalyser
         if ($document !== null) {
             $issues = array_merge(
                 $issues,
+                $this->checkParseIntegrity(),
                 $this->checkImages($document),
                 $this->checkLinks($document),
                 $this->checkHeadings($document),
@@ -73,8 +74,13 @@ final class ContentAnalyser
         return $issues;
     }
 
+    /** Set when the parser could not build the whole tree. */
+    private bool $parseTruncated = false;
+
     private function parse(string $html): ?\DOMDocument
     {
+        $this->parseTruncated = false;
+
         $html = trim($html);
 
         if ($html === '') {
@@ -84,19 +90,60 @@ final class ContentAnalyser
         $document = new \DOMDocument();
 
         // Content is a fragment, not a document, and it is written by people
-        // rather than generated. Suppressing libxml's complaints is deliberate:
-        // we are judging the content, not validating the markup.
+        // rather than generated. Suppressing libxml's complaints about markup
+        // style is deliberate: we are judging the content, not validating it.
         $previous = libxml_use_internal_errors(true);
 
+        // LIBXML_PARSEHUGE lifts the hard nesting limit of 256.
+        //
+        // Without it, anything deeper than 256 elements is silently dropped and
+        // this class reports "no problems" for content it never saw. A tool
+        // that quietly skips work is worse than one that fails loudly, because
+        // the editor believes the page was checked. Page builders reach 30 to
+        // 60 levels routinely and old nested-table content goes further.
         $document->loadHTML(
             '<?xml encoding="UTF-8"><div id="cqg-root">' . $html . '</div>',
-            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD
+            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD | LIBXML_PARSEHUGE
         );
+
+        // Errors that mean the tree is incomplete, as opposed to the usual
+        // HTML5 grumbling. If the parser gave up, the editor has to be told.
+        foreach (libxml_get_errors() as $error) {
+            if ($error->level === LIBXML_ERR_FATAL) {
+                $this->parseTruncated = true;
+
+                break;
+            }
+        }
 
         libxml_clear_errors();
         libxml_use_internal_errors($previous);
 
         return $document;
+    }
+
+    /**
+     * Reports that the check itself was incomplete.
+     *
+     * The alternative is to say nothing, which reads as "this content is fine"
+     * when the truth is "this content was not fully examined". Those are
+     * different statements and only one of them is honest.
+     *
+     * @return array<int,Issue>
+     */
+    private function checkParseIntegrity(): array
+    {
+        if (!$this->parseTruncated) {
+            return [];
+        }
+
+        return [new Issue(
+            rule: 'content-not-fully-parsed',
+            severity: Issue::SEVERITY_WARNING,
+            message: __('Part of this content could not be read, so the checks below may be incomplete.', 'content-quality-guard'),
+            fix: __('This usually means very deeply nested or badly broken markup. Simplify the structure, then check again.', 'content-quality-guard'),
+            standard: __('Tool limitation, reported rather than hidden', 'content-quality-guard')
+        )];
     }
 
     /**
