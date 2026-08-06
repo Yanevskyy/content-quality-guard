@@ -62,6 +62,9 @@ final class ContentAnalyser
                 $this->checkHeadings($document),
                 $this->checkTables($document),
                 $this->checkIframes($document),
+                $this->checkMedia($document),
+                $this->checkVectors($document),
+                $this->checkForms($document),
             );
         }
 
@@ -423,6 +426,176 @@ final class ContentAnalyser
                     standard: 'WCAG 2.1 - 4.1.2 Name, Role, Value (Level A)'
                 );
             }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Audio and video.
+     *
+     * Recorded speech is unusable to a deaf visitor without a transcript or
+     * captions, in the same way an image is unusable to a blind visitor without
+     * alt text. Local government publishes a lot of recorded material, so this
+     * is not a corner case here.
+     *
+     * @return array<int,Issue>
+     */
+    private function checkMedia(\DOMDocument $document): array
+    {
+        $issues = [];
+
+        foreach (['audio', 'video'] as $tag) {
+            foreach ($document->getElementsByTagName($tag) as $media) {
+                $source = $media->getAttribute('src');
+
+                if ($source === '') {
+                    $sources = $media->getElementsByTagName('source');
+                    $source  = $sources->length > 0 ? $sources->item(0)->getAttribute('src') : '';
+                }
+
+                $snippet = $this->snippet($source !== '' ? basename($source) : $tag);
+
+                // A track element is the machine readable answer. Its absence
+                // does not prove there are no captions elsewhere on the page,
+                // so this is a warning rather than an error.
+                $hasTrack = $media->getElementsByTagName('track')->length > 0;
+
+                if ($hasTrack) {
+                    continue;
+                }
+
+                $issues[] = new Issue(
+                    rule: $tag === 'audio' ? 'audio-no-alternative' : 'video-no-captions',
+                    severity: Issue::SEVERITY_WARNING,
+                    message: $tag === 'audio'
+                        ? __('Audio has no captions track or transcript link.', 'content-quality-guard')
+                        : __('Video has no captions track.', 'content-quality-guard'),
+                    context: $snippet,
+                    fix: $tag === 'audio'
+                        ? __('Add a transcript on the page, or a track element with captions. Recorded speech is unusable without one for anyone who cannot hear it.', 'content-quality-guard')
+                        : __('Add a track element with captions. Auto-generated captions from the hosting platform do not count towards conformance.', 'content-quality-guard'),
+                    standard: $tag === 'audio'
+                        ? 'WCAG 2.1 - 1.2.1 Audio-only and Video-only (Level A)'
+                        : 'WCAG 2.1 - 1.2.2 Captions (Level A)'
+                );
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Inline vector graphics.
+     *
+     * An SVG carrying meaning needs an accessible name; a decorative one needs
+     * to be hidden from assistive technology. Doing neither leaves a screen
+     * reader announcing "graphic" with no idea what it shows.
+     *
+     * @return array<int,Issue>
+     */
+    private function checkVectors(\DOMDocument $document): array
+    {
+        $issues = [];
+
+        foreach ($document->getElementsByTagName('svg') as $svg) {
+            $hidden = $svg->getAttribute('aria-hidden') === 'true';
+
+            if ($hidden) {
+                continue;
+            }
+
+            $hasTitle = $svg->getElementsByTagName('title')->length > 0;
+            $hasLabel = trim($svg->getAttribute('aria-label')) !== ''
+                || trim($svg->getAttribute('aria-labelledby')) !== ''
+                || trim($svg->getAttribute('role')) === 'presentation';
+
+            if ($hasTitle || $hasLabel) {
+                continue;
+            }
+
+            $issues[] = new Issue(
+                rule: 'svg-no-name',
+                severity: Issue::SEVERITY_WARNING,
+                message: __('Inline graphic has no accessible name and is not hidden.', 'content-quality-guard'),
+                context: $this->snippet($svg->getAttribute('class') ?: 'svg'),
+                fix: __('If it carries meaning, add a title element inside it. If it is decorative, add aria-hidden="true" so it is skipped deliberately.', 'content-quality-guard'),
+                standard: 'WCAG 2.1 - 1.1.1 Non-text Content (Level A)'
+            );
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Form controls placed inside content.
+     *
+     * Editors paste embedded forms and sign-up boxes into pages regularly, and
+     * an input without a label is unusable with a screen reader.
+     *
+     * @return array<int,Issue>
+     */
+    private function checkForms(\DOMDocument $document): array
+    {
+        $issues = [];
+        $xpath  = new \DOMXPath($document);
+
+        $controls = $xpath->query('//input|//select|//textarea');
+
+        if ($controls === false) {
+            return $issues;
+        }
+
+        foreach ($controls as $control) {
+            $type = strtolower($control->getAttribute('type'));
+
+            // Hidden fields and buttons carry their own name or need none.
+            if (in_array($type, ['hidden', 'submit', 'button', 'image', 'reset'], true)) {
+                continue;
+            }
+
+            $id = $control->getAttribute('id');
+
+            $hasLabel = trim($control->getAttribute('aria-label')) !== ''
+                || trim($control->getAttribute('aria-labelledby')) !== ''
+                || trim($control->getAttribute('title')) !== '';
+
+            if (!$hasLabel && $id !== '') {
+                $labels   = $xpath->query(sprintf('//label[@for="%s"]', addslashes($id)));
+                $hasLabel = $labels !== false && $labels->length > 0;
+            }
+
+            // A control wrapped in a label needs no for attribute.
+            if (!$hasLabel) {
+                $parent = $control->parentNode;
+
+                while ($parent instanceof \DOMElement) {
+                    if ($parent->nodeName === 'label') {
+                        $hasLabel = true;
+
+                        break;
+                    }
+
+                    $parent = $parent->parentNode;
+                }
+            }
+
+            if ($hasLabel) {
+                continue;
+            }
+
+            $issues[] = new Issue(
+                rule: 'input-no-label',
+                severity: Issue::SEVERITY_ERROR,
+                message: sprintf(
+                    /* translators: %s: the form control tag name. */
+                    __('Form field (%s) has no label.', 'content-quality-guard'),
+                    $control->nodeName . ($type !== '' ? ' type=' . $type : '')
+                ),
+                context: $this->snippet($control->getAttribute('name') ?: $id),
+                fix: __('Add a label element pointing at this field, or an aria-label. Placeholder text alone disappears as soon as someone starts typing.', 'content-quality-guard'),
+                standard: 'WCAG 2.1 - 3.3.2 Labels or Instructions (Level A)'
+            );
         }
 
         return $issues;

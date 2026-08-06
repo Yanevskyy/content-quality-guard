@@ -81,6 +81,16 @@ final class EditorPanel
     }
 
     /**
+     * How many findings are shown before the rest are summarised.
+     *
+     * A page with a hundred images missing alt text produces a hundred
+     * findings, all of them true and all of them the same instruction. Printing
+     * every one turns a useful panel into a wall an editor scrolls past. The
+     * count is never hidden; only the repetition is.
+     */
+    private const VISIBLE_LIMIT = 12;
+
+    /**
      * @param array<int,array<string,string>> $issues
      */
     private static function renderIssues(array $issues): void
@@ -96,6 +106,25 @@ final class EditorPanel
         usort($issues, static function (array $a, array $b) use ($order): int {
             return ($order[$a['severity'] ?? 'notice'] ?? 3) <=> ($order[$b['severity'] ?? 'notice'] ?? 3);
         });
+
+        $total    = count($issues);
+        $overflow = [];
+
+        if ($total > self::VISIBLE_LIMIT) {
+            $hidden = array_slice($issues, self::VISIBLE_LIMIT);
+            $issues = array_slice($issues, 0, self::VISIBLE_LIMIT);
+
+            // Group what is left by rule, so the summary says what kind of
+            // problem repeats rather than just how many remain.
+            foreach ($hidden as $issue) {
+                $rule = $issue['rule'] ?? 'other';
+
+                $overflow[$rule] ??= ['count' => 0, 'message' => $issue['message'] ?? $rule];
+                $overflow[$rule]['count']++;
+            }
+
+            arsort($overflow);
+        }
 
         echo '<ul class="cqg-issues">';
 
@@ -123,6 +152,37 @@ final class EditorPanel
         }
 
         echo '</ul>';
+
+        if ($overflow !== []) {
+            echo '<div class="cqg-overflow">';
+
+            printf(
+                '<p class="cqg-overflow__title">%s</p>',
+                esc_html(sprintf(
+                    /* translators: 1: number of further findings, 2: total findings. */
+                    _n(
+                        '%1$d more finding, %2$d in total:',
+                        '%1$d more findings, %2$d in total:',
+                        $total - self::VISIBLE_LIMIT,
+                        'content-quality-guard'
+                    ),
+                    $total - self::VISIBLE_LIMIT,
+                    $total
+                ))
+            );
+
+            echo '<ul class="cqg-overflow__list">';
+
+            foreach ($overflow as $summary) {
+                printf(
+                    '<li><strong>%d</strong> %s</li>',
+                    (int) $summary['count'],
+                    esc_html((string) $summary['message'])
+                );
+            }
+
+            echo '</ul></div>';
+        }
 
         printf(
             '<p><button type="button" class="button cqg-recheck">%s</button></p>',
