@@ -1,0 +1,175 @@
+/**
+ * Editor panel and overview styles.
+ *
+ * Severity is carried by a word as well as a colour, because a red dot means
+ * nothing to a colour blind editor, and the panel is read at a glance.
+ */
+
+.cqg-panel {
+    font-size: 13px;
+}
+
+.cqg-clear {
+    padding: 10px 12px;
+    border-left: 4px solid #00a32a;
+    background: #f0f7f1;
+    color: #14532d;
+    font-weight: 600;
+}
+
+.cqg-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 12px;
+    padding: 0;
+    list-style: none;
+}
+
+.cqg-count {
+    padding: 4px 9px;
+    border-radius: 12px;
+    font-size: 12px;
+}
+
+.cqg-count--error   { background: #fce9e7; color: #8a1c08; }
+.cqg-count--warning { background: #fdf6e3; color: #6b4b00; }
+.cqg-count--notice  { background: #eef1f3; color: #44494d; }
+
+.cqg-issues {
+    margin: 0 0 12px;
+    padding: 0;
+    list-style: none;
+}
+
+.cqg-issue {
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    border-left: 4px solid #c3c4c7;
+    border-radius: 0 4px 4px 0;
+    background: #fbfbfc;
+}
+
+.cqg-issue--error   { border-left-color: #b32d2e; }
+.cqg-issue--warning { border-left-color: #dba617; }
+.cqg-issue--notice  { border-left-color: #8c8f94; }
+
+.cqg-issue p {
+    margin: 0 0 5px;
+}
+
+.cqg-issue__message {
+    font-weight: 600;
+}
+
+.cqg-issue__context code {
+    display: block;
+    padding: 3px 6px;
+    background: #f0f0f1;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+}
+
+.cqg-issue__fix {
+    color: #50575e;
+}
+
+.cqg-issue__standard {
+    margin-bottom: 0 !important;
+    color: #787c82;
+    font-size: 11px;
+}
+
+/* Speed ---------------------------------------------------------------- */
+
+.cqg-speed {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #dcdcde;
+}
+
+.cqg-speed h4 {
+    margin: 0 0 8px;
+}
+
+.cqg-speed__score {
+    margin: 0 0 8px;
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.cqg-speed__score span {
+    color: #787c82;
+    font-size: 13px;
+    font-weight: 400;
+}
+
+.cqg-speed__score--good    { color: #00a32a; }
+.cqg-speed__score--fair    { color: #bd8600; }
+.cqg-speed__score--poor    { color: #b32d2e; }
+.cqg-speed__score--unknown { color: #787c82; }
+
+.cqg-metrics,
+.cqg-opportunities {
+    margin: 0 0 8px;
+    padding: 0;
+    list-style: none;
+}
+
+.cqg-metrics li {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px solid #f0f0f1;
+}
+
+.cqg-opportunities li {
+    padding: 3px 0;
+    color: #50575e;
+    font-size: 12px;
+}
+
+.cqg-opportunities em {
+    color: #787c82;
+}
+
+.cqg-status {
+    min-height: 18px;
+    margin: 6px 0 0;
+    color: #50575e;
+    font-size: 12px;
+}
+
+/* Overview ------------------------------------------------------------- */
+
+.cqg-totals {
+    padding: 10px 14px;
+    border-left: 4px solid #2271b1;
+    background: #f0f6fc;
+    font-size: 14px;
+}
+
+.cqg-badge {
+    display: inline-block;
+    min-width: 24px;
+    padding: 2px 8px;
+    border-radius: 11px;
+    font-weight: 700;
+    text-align: center;
+}
+
+.cqg-badge--error   { background: #fce9e7; color: #8a1c08; }
+.cqg-badge--warning { background: #fdf6e3; color: #6b4b00; }
+.cqg-badge--notice  { background: #eef1f3; color: #44494d; }
+
+.cqg-dash {
+    color: #a7aaad;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .cqg-panel * {
+        transition: none !important;
+    }
+}
