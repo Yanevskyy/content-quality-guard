@@ -48,6 +48,8 @@ final class Plugin
         add_action('admin_init', [Admin\OverviewPage::class, 'registerSettings']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue']);
         add_action('rest_api_init', [$this, 'registerRoutes']);
+
+        Maintenance\Sweep::register();
     }
 
     public function analyser(): ContentAnalyser
@@ -96,6 +98,11 @@ final class Plugin
 
         update_post_meta($post->ID, self::META_ISSUES, $stored);
         update_post_meta($post->ID, self::META_SUMMARY, $this->summarise($stored));
+
+        // Stamped here rather than only in the sweep. A page analysed on save
+        // has just been checked, and leaving the stamp alone would send it
+        // straight back to the front of the oldest-first queue.
+        update_post_meta($post->ID, Maintenance\Sweep::META_CHECKED, gmdate('Y-m-d H:i:s'));
 
         return $stored;
     }

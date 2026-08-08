@@ -201,3 +201,32 @@
 .cqg-overflow__list li {
     padding: 2px 0;
 }
+
+/* History chart --------------------------------------------------------- */
+
+.cqg-chart {
+    display: block;
+    width: 100%;
+    max-width: 640px;
+    height: 120px;
+    margin: 8px 0 12px;
+    padding: 8px;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.cqg-chart-data {
+    max-width: 640px;
+    margin-bottom: 20px;
+}
+
+.cqg-chart-data summary {
+    cursor: pointer;
+    padding: 4px 0;
+    color: #2271b1;
+}
+
+.cqg-chart-data table {
+    margin-top: 8px;
+}

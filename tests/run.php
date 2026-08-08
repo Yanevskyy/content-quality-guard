@@ -207,4 +207,229 @@ TestRunner::assert(
     in_array('image-missing-alt', rulesFor($analyser, $deep), true)
 );
 
+// ---------------------------------------------------------------------------
+// History series
+// ---------------------------------------------------------------------------
+
+TestRunner::group('History series');
+
+/**
+ * Mirrors Sweep::recordHistory. One point per day, replacing the day if it
+ * already ran, capped to a rolling window.
+ *
+ * @param array<string,array<string,int>> $history
+ * @return array<string,array<string,int>>
+ */
+function recordDay(array $history, string $day, int $total, int $limit = 365): array
+{
+    $history[$day] = ['total' => $total];
+
+    ksort($history);
+
+    if (count($history) > $limit) {
+        $history = array_slice($history, -$limit, null, true);
+    }
+
+    return $history;
+}
+
+$series = recordDay([], '2026-08-06', 14);
+$series = recordDay($series, '2026-08-07', 11);
+
+TestRunner::same('each day adds a point', 2, count($series));
+
+$series = recordDay($series, '2026-08-07', 9);
+
+TestRunner::same('a second run on the same day replaces it', 2, count($series));
+TestRunner::same('the later figure wins', 9, $series['2026-08-07']['total']);
+
+$series = recordDay($series, '2026-08-05', 20);
+
+TestRunner::same('a late arrival is sorted into place', '2026-08-05', (string) array_key_first($series));
+
+$capped = [];
+
+foreach (range(1, 12) as $day) {
+    $capped = recordDay($capped, sprintf('2026-01-%02d', $day), $day, 10);
+}
+
+TestRunner::same('the window is capped', 10, count($capped));
+TestRunner::same('the oldest points fall off, not the newest', '2026-01-03', (string) array_key_first($capped));
+TestRunner::same('the most recent point is kept', '2026-01-12', (string) array_key_last($capped));
+
+// ---------------------------------------------------------------------------
+// Trend
+// ---------------------------------------------------------------------------
+
+TestRunner::group('Trend');
+
+/**
+ * Mirrors Sweep::trend. One measurement is not a trend.
+ *
+ * @param array<string,array<string,int>> $history
+ */
+function trendChange(array $history): ?int
+{
+    if (count($history) < 2) {
+        return null;
+    }
+
+    $first = reset($history);
+    $last  = end($history);
+
+    return (int) $last['total'] - (int) $first['total'];
+}
+
+TestRunner::same('no history produces no trend', null, trendChange([]));
+TestRunner::same('a single point produces no trend', null, trendChange(['2026-08-08' => ['total' => 10]]));
+
+TestRunner::same(
+    'an improvement reads as a fall',
+    -6,
+    trendChange(['2026-08-06' => ['total' => 14], '2026-08-08' => ['total' => 8]])
+);
+
+TestRunner::same(
+    'a regression reads as a rise',
+    5,
+    trendChange(['2026-08-06' => ['total' => 3], '2026-08-08' => ['total' => 8]])
+);
+
+TestRunner::same(
+    'no net change is reported as zero, not as no data',
+    0,
+    trendChange(['2026-08-06' => ['total' => 8], '2026-08-08' => ['total' => 8]])
+);
+
+// ---------------------------------------------------------------------------
+// Chart geometry
+// ---------------------------------------------------------------------------
+
+TestRunner::group('Chart geometry');
+
+/**
+ * Mirrors the polyline built in OverviewPage::renderHistory.
+ *
+ * @param array<int,int> $values
+ * @return array<int,array{float,float}>
+ */
+function polyline(array $values, int $width = 640, int $height = 120): array
+{
+    $peak  = max($values) ?: 1;
+    $count = count($values);
+    $step  = $count > 1 ? $width / ($count - 1) : $width;
+
+    $points = [];
+
+    foreach ($values as $index => $value) {
+        $points[] = [
+            round($index * $step, 1),
+            round($height - (($value / $peak) * ($height - 10)) - 5, 1),
+        ];
+    }
+
+    return $points;
+}
+
+$line = polyline([10, 5, 0]);
+
+TestRunner::same('the first point sits on the left edge', 0.0, $line[0][0]);
+TestRunner::same('the last point sits on the right edge', 640.0, $line[2][0]);
+TestRunner::same('the peak sits at the top, inside the padding', 5.0, $line[0][1]);
+TestRunner::same('zero sits at the bottom, inside the padding', 115.0, $line[2][1]);
+
+TestRunner::assert(
+    'a flat series does not divide by zero',
+    (static function (): bool {
+        $flat = polyline([0, 0, 0]);
+
+        return is_finite($flat[0][1]) && is_finite($flat[2][1]);
+    })()
+);
+
+TestRunner::assert(
+    'every point stays inside the box',
+    (static function (): bool {
+        foreach (polyline([3, 19, 7, 12, 1]) as [$x, $y]) {
+            if ($x < 0 || $x > 640 || $y < 0 || $y > 120) {
+                return false;
+            }
+        }
+
+        return true;
+    })()
+);
+
+// ---------------------------------------------------------------------------
+// Sweep queue
+// ---------------------------------------------------------------------------
+
+TestRunner::group('Sweep queue');
+
+/**
+ * Mirrors Sweep::oldestFirst: never-checked pages ahead of stale ones, and the
+ * batch filled from the stale queue only if room is left.
+ *
+ * @param array<int,array{id:int,checked:?string}> $posts
+ * @return array<int,int>
+ */
+function sweepQueue(array $posts, int $batch): array
+{
+    $never = array_values(array_filter($posts, static fn(array $p): bool => $p['checked'] === null));
+    $stale = array_values(array_filter($posts, static fn(array $p): bool => $p['checked'] !== null));
+
+    usort($never, static fn(array $a, array $b): int => $a['id'] <=> $b['id']);
+    usort($stale, static fn(array $a, array $b): int => strcmp((string) $a['checked'], (string) $b['checked']));
+
+    $queue = array_slice($never, 0, $batch);
+
+    if (count($queue) < $batch) {
+        $queue = array_merge($queue, array_slice($stale, 0, $batch - count($queue)));
+    }
+
+    return array_map(static fn(array $p): int => $p['id'], $queue);
+}
+
+$library = [
+    ['id' => 1, 'checked' => '2026-08-01 09:00:00'],
+    ['id' => 2, 'checked' => null],
+    ['id' => 3, 'checked' => '2026-07-01 09:00:00'],
+    ['id' => 4, 'checked' => null],
+    ['id' => 5, 'checked' => '2026-08-07 09:00:00'],
+];
+
+TestRunner::same(
+    'never-checked pages go first, in id order',
+    [2, 4],
+    array_slice(sweepQueue($library, 4), 0, 2)
+);
+
+TestRunner::same(
+    'the batch is then filled with the stalest',
+    [2, 4, 3, 1],
+    sweepQueue($library, 4)
+);
+
+TestRunner::same(
+    'a small batch never reaches the stale queue',
+    [2, 4],
+    sweepQueue($library, 2)
+);
+
+TestRunner::same(
+    'the most recently checked page is last to be revisited',
+    5,
+    sweepQueue($library, 5)[4]
+);
+
+TestRunner::same(
+    'a fully checked site still cycles oldest first',
+    [3, 1, 5],
+    sweepQueue([
+        ['id' => 1, 'checked' => '2026-08-01 09:00:00'],
+        ['id' => 3, 'checked' => '2026-07-01 09:00:00'],
+        ['id' => 5, 'checked' => '2026-08-07 09:00:00'],
+    ], 3)
+);
+
 exit(TestRunner::summary());
