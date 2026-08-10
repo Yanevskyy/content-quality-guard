@@ -25,6 +25,16 @@ final class Plugin
     public const META_ISSUES  = '_cqg_issues';
     public const META_SUMMARY = '_cqg_summary';
 
+    /**
+     * Link verdicts live in their own key.
+     *
+     * They are produced by the nightly sweep, not on save, because checking
+     * them means waiting on other people's servers. Keeping them separate is
+     * what stops an editor saving a page and watching its broken links vanish
+     * from the report until the next sweep puts them back.
+     */
+    public const META_LINK_ISSUES = '_cqg_link_issues';
+
     private static ?self $instance = null;
 
     private bool $booted = false;
@@ -86,10 +96,22 @@ final class Plugin
     /**
      * @return array<int,array<string,string>>
      */
-    public function analyseAndStore(\WP_Post $post): array
+    public function analyseAndStore(\WP_Post $post, bool $checkLinks = false): array
     {
+        // Blocks are rendered before analysis. Reusable blocks, dynamic blocks
+        // and shortcodes are markers in post_content, so reading it raw means
+        // checking the marker rather than the image, heading or table it turns
+        // into. On a block-built site that is most of the page.
+        $rendered = (string) $post->post_content;
+
+        if (function_exists('do_blocks')) {
+            $rendered = do_blocks($rendered);
+        }
+
+        $rendered = do_shortcode($rendered);
+
         $issues = $this->analyser()->analyse(
-            (string) $post->post_content,
+            $rendered,
             (string) $post->post_title,
             $this->describedAs($post)
         );
@@ -97,7 +119,17 @@ final class Plugin
         $stored = array_map(static fn(Issue $issue): array => $issue->toArray(), $issues);
 
         update_post_meta($post->ID, self::META_ISSUES, $stored);
-        update_post_meta($post->ID, self::META_SUMMARY, $this->summarise($stored));
+
+        if ($checkLinks) {
+            $linkIssues = array_map(
+                static fn(Issue $issue): array => $issue->toArray(),
+                (new Analyser\LinkChecker())->check($rendered)
+            );
+
+            update_post_meta($post->ID, self::META_LINK_ISSUES, $linkIssues);
+        }
+
+        update_post_meta($post->ID, self::META_SUMMARY, $this->summarise($this->allIssues($post->ID)));
 
         // Stamped here rather than only in the sweep. A page analysed on save
         // has just been checked, and leaving the stamp alone would send it
@@ -105,6 +137,24 @@ final class Plugin
         update_post_meta($post->ID, Maintenance\Sweep::META_CHECKED, gmdate('Y-m-d H:i:s'));
 
         return $stored;
+    }
+
+    /**
+     * Content issues and link issues together, which is what a reader of the
+     * report cares about. They are stored apart only because they are produced
+     * at different times.
+     *
+     * @return array<int,array<string,string>>
+     */
+    public function allIssues(int $postId): array
+    {
+        $content = get_post_meta($postId, self::META_ISSUES, true);
+        $links   = get_post_meta($postId, self::META_LINK_ISSUES, true);
+
+        return array_merge(
+            is_array($content) ? $content : [],
+            is_array($links) ? $links : []
+        );
     }
 
     /**
@@ -225,10 +275,10 @@ final class Plugin
             return new \WP_REST_Response(['error' => 'not_found'], 404);
         }
 
-        $issues = $this->analyseAndStore($post);
+        $this->analyseAndStore($post);
 
         return new \WP_REST_Response([
-            'issues'  => $issues,
+            'issues'  => $this->allIssues($post->ID),
             'summary' => get_post_meta($post->ID, self::META_SUMMARY, true),
         ]);
     }

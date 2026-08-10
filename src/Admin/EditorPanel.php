@@ -23,7 +23,10 @@ final class EditorPanel
 {
     public static function render(\WP_Post $post): void
     {
-        $issues = get_post_meta($post->ID, Plugin::META_ISSUES, true);
+        // Content issues and link verdicts together: they are stored apart
+        // because they are produced at different times, not because a reader
+        // cares about the difference.
+        $issues = Plugin::instance()->allIssues($post->ID);
         $issues = is_array($issues) ? $issues : [];
 
         $speed = Plugin::instance()->pageSpeed()->lastResult($post->ID);

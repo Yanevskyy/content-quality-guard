@@ -94,7 +94,9 @@ final class Sweep
                 $first++;
             }
 
-            Plugin::instance()->analyseAndStore($post);
+            // Links are checked here and nowhere else. This is the job that
+            // catches a page going stale without anybody editing it.
+            Plugin::instance()->analyseAndStore($post, true);
             update_post_meta($post->ID, self::META_CHECKED, gmdate('Y-m-d H:i:s'));
 
             $checked++;

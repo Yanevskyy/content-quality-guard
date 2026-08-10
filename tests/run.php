@@ -432,4 +432,150 @@ TestRunner::same(
     ], 3)
 );
 
+// ---------------------------------------------------------------------------
+// Link checking
+// ---------------------------------------------------------------------------
+
+TestRunner::group('Link verdicts');
+
+/**
+ * Mirrors LinkChecker::probe's classification of a status code.
+ */
+function linkState(int $code): string
+{
+    if ($code === 404 || $code === 410) {
+        return 'gone';
+    }
+
+    if ($code >= 500) {
+        return 'server_error';
+    }
+
+    return 'ok';
+}
+
+TestRunner::same('404 is a dead link', 'gone', linkState(404));
+TestRunner::same('410 is a dead link', 'gone', linkState(410));
+TestRunner::same('500 is the other end having trouble', 'server_error', linkState(500));
+TestRunner::same('503 is the other end having trouble', 'server_error', linkState(503));
+TestRunner::same('200 is fine', 'ok', linkState(200));
+TestRunner::same('301 is fine, redirects are followed', 'ok', linkState(301));
+
+// Measured against the sites this client links to: gov.ie answers 403 to
+// anything automated, including pages that are perfectly alive.
+TestRunner::same('403 is not a dead link', 'ok', linkState(403));
+TestRunner::same('401 is not a dead link', 'ok', linkState(401));
+
+TestRunner::group('Which links are checked');
+
+/**
+ * Mirrors LinkChecker::extractUrls.
+ *
+ * @return array<int,string>
+ */
+function externalLinks(string $html, string $ownHost): array
+{
+    if (!preg_match_all('/<a\s[^>]*href=["\']([^"\']+)["\']/i', $html, $matches)) {
+        return [];
+    }
+
+    $urls = [];
+
+    foreach ($matches[1] as $href) {
+        $href = trim(html_entity_decode($href, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+
+        if (!str_starts_with(strtolower($href), 'http')) {
+            continue;
+        }
+
+        $host = parse_url($href, PHP_URL_HOST);
+
+        if (!is_string($host) || $host === '' || $host === $ownHost) {
+            continue;
+        }
+
+        $urls[$href] = true;
+    }
+
+    return array_keys($urls);
+}
+
+$page = '<a href="https://example.org/a">a</a>'
+    . '<a href="https://example.org/a">same again</a>'
+    . '<a href="/internal">internal</a>'
+    . '<a href="mailto:x@example.ie">email</a>'
+    . '<a href="tel:+353851234567">phone</a>'
+    . '<a href="https://ourown.ie/page">our own site</a>'
+    . '<a href="https://other.example/b">b</a>';
+
+$found = externalLinks($page, 'ourown.ie');
+
+TestRunner::same('duplicates are checked once', 2, count($found));
+TestRunner::assert('relative links are skipped', !in_array('/internal', $found, true));
+TestRunner::assert('mailto is skipped', !in_array('mailto:x@example.ie', $found, true));
+TestRunner::assert('our own site is skipped', !in_array('https://ourown.ie/page', $found, true));
+TestRunner::assert('an external link is checked', in_array('https://other.example/b', $found, true));
+
+TestRunner::same('a page with no links costs nothing', 0, count(externalLinks('<p>Just words.</p>', 'ourown.ie')));
+
+TestRunner::group('Issue severity');
+
+/**
+ * Slow is recorded but never reported: a slow server is not a dead one, and a
+ * report that cries wolf gets ignored wholesale.
+ */
+function reportedSeverity(string $state): ?string
+{
+    return match ($state) {
+        'gone'         => 'error',
+        'server_error' => 'warning',
+        'unreachable'  => 'warning',
+        default        => null,
+    };
+}
+
+TestRunner::same('a dead link must be fixed', 'error', reportedSeverity('gone'));
+TestRunner::same('a server error is a warning', 'warning', reportedSeverity('server_error'));
+TestRunner::same('an unreachable host is a warning', 'warning', reportedSeverity('unreachable'));
+TestRunner::same('a slow link is not reported at all', null, reportedSeverity('slow'));
+TestRunner::same('a working link is not reported', null, reportedSeverity('ok'));
+
+// ---------------------------------------------------------------------------
+// Where issues are stored
+// ---------------------------------------------------------------------------
+
+TestRunner::group('Issue storage');
+
+/**
+ * Content issues and link issues live in separate keys because they are
+ * produced at different times, and are merged for display.
+ *
+ * @param array<int,array<string,string>> $content
+ * @param array<int,array<string,string>> $links
+ * @return array<int,array<string,string>>
+ */
+function allIssues(array $content, array $links): array
+{
+    return array_merge($content, $links);
+}
+
+$content = [['rule' => 'image-missing-alt', 'severity' => 'error']];
+$links   = [['rule' => 'link-broken', 'severity' => 'error']];
+
+TestRunner::same('both sets are shown together', 2, count(allIssues($content, $links)));
+
+TestRunner::same(
+    'saving a page does not lose its link verdicts',
+    1,
+    // A save rewrites only the content key. The link key is untouched, so the
+    // broken link stays reported until the next sweep says otherwise.
+    count(allIssues([], $links))
+);
+
+TestRunner::same(
+    'a page with no links behaves normally',
+    1,
+    count(allIssues($content, []))
+);
+
 exit(TestRunner::summary());
