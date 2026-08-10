@@ -120,12 +120,21 @@ final class PageSpeedClient
         $lighthouse = $payload['lighthouseResult'];
         $audits     = $lighthouse['audits'] ?? [];
 
-        $metric = static function (string $id) use ($audits): array {
+        // Layout shift is a ratio, not a duration. Dividing it by a thousand
+        // like the timings produced a number in a field labelled seconds that
+        // meant nothing at all, and a stored figure nobody could interpret is
+        // worse than an absent one.
+        $metric = static function (string $id, bool $isDuration = true) use ($audits): array {
             $audit = $audits[$id] ?? [];
 
             return [
                 'value'   => $audit['displayValue'] ?? '',
-                'seconds' => isset($audit['numericValue']) ? round(((float) $audit['numericValue']) / 1000, 2) : null,
+                'seconds' => $isDuration && isset($audit['numericValue'])
+                    ? round(((float) $audit['numericValue']) / 1000, 2)
+                    : null,
+                'ratio'   => !$isDuration && isset($audit['numericValue'])
+                    ? round((float) $audit['numericValue'], 3)
+                    : null,
                 'score'   => isset($audit['score']) ? (int) round(((float) $audit['score']) * 100) : null,
             ];
         };
@@ -160,7 +169,7 @@ final class PageSpeedClient
             'strategy'      => $strategy,
             'score'         => $score !== null ? (int) round(((float) $score) * 100) : null,
             'lcp'           => $metric('largest-contentful-paint'),
-            'cls'           => $metric('cumulative-layout-shift'),
+            'cls'           => $metric('cumulative-layout-shift', false),
             'tbt'           => $metric('total-blocking-time'),
             'fcp'           => $metric('first-contentful-paint'),
             'opportunities' => array_slice($opportunities, 0, 5),

@@ -24,6 +24,11 @@ defined('ABSPATH') || exit;
 
 final class OverviewPage
 {
+    /** How many rows the table is showing, and how many exist. */
+    private static int $shown = 0;
+
+    private static int $matched = 0;
+
     public const SLUG = 'content-quality';
 
     public static function addMenu(): void
@@ -44,6 +49,13 @@ final class OverviewPage
         register_setting(self::SLUG, PageSpeedClient::OPTION_API_KEY, [
             'type'              => 'string',
             'sanitize_callback' => 'sanitize_text_field',
+            'default'           => '',
+        ]);
+
+        register_setting(self::SLUG, Sweep::OPTION_DIGEST, [
+            'type'              => 'string',
+            'sanitize_callback' => static fn(mixed $value): string =>
+                is_email((string) $value) ? sanitize_email((string) $value) : '',
             'default'           => '',
         ]);
     }
@@ -67,7 +79,7 @@ final class OverviewPage
             );
         }
 
-        $rows = self::collect();
+        $rows = self::applyFilter(self::collect());
 
         ?>
         <div class="wrap cqg-overview">
@@ -102,6 +114,18 @@ final class OverviewPage
             </form>
 
             <?php self::renderSweepStatus(); ?>
+
+            <form method="get" class="cqg-table-filters">
+                <input type="hidden" name="page" value="content-quality">
+                <label class="screen-reader-text" for="cqg-show"><?php esc_html_e('Show', 'content-quality-guard'); ?></label>
+                <select name="show" id="cqg-show">
+                    <option value=""><?php esc_html_e('All pages', 'content-quality-guard'); ?></option>
+                    <option value="error" <?php selected(self::filter(), 'error'); ?>><?php esc_html_e('Only pages with must fix', 'content-quality-guard'); ?></option>
+                    <option value="any" <?php selected(self::filter(), 'any'); ?>><?php esc_html_e('Only pages with something to fix', 'content-quality-guard'); ?></option>
+                    <option value="clean" <?php selected(self::filter(), 'clean'); ?>><?php esc_html_e('Only clean pages', 'content-quality-guard'); ?></option>
+                </select>
+                <button type="submit" class="button"><?php esc_html_e('Apply', 'content-quality-guard'); ?></button>
+            </form>
 
             <table class="wp-list-table widefat fixed striped">
                 <thead>
@@ -139,6 +163,41 @@ final class OverviewPage
                 <?php endif; ?>
                 </tbody>
             </table>
+
+            <?php if (self::$matched > self::$shown) : ?>
+                <p class="description">
+                    <?php
+                    printf(
+                        /* translators: 1: rows shown, 2: total pages. */
+                        esc_html__('Showing the %1$d worst of %2$d pages. Use the filter above to narrow it down.', 'content-quality-guard'),
+                        (int) self::$shown,
+                        (int) self::$matched
+                    );
+                    ?>
+                </p>
+            <?php endif; ?>
+
+            <h2 class="title"><?php esc_html_e('Overnight digest', 'content-quality-guard'); ?></h2>
+            <p class="description">
+                <?php esc_html_e('An email after the nightly recheck, sent only when the number of issues actually changed. Leave blank for none.', 'content-quality-guard'); ?>
+            </p>
+            <form method="post" action="options.php" class="cqg-digest-form">
+                <?php settings_fields(self::SLUG); ?>
+                <table class="form-table" role="presentation">
+                    <tr>
+                        <th scope="row">
+                            <label for="cqg-digest"><?php esc_html_e('Send to', 'content-quality-guard'); ?></label>
+                        </th>
+                        <td>
+                            <input type="email" id="cqg-digest" class="regular-text"
+                                   name="<?php echo esc_attr(Sweep::OPTION_DIGEST); ?>"
+                                   value="<?php echo esc_attr((string) get_option(Sweep::OPTION_DIGEST, '')); ?>"
+                                   placeholder="name@example.ie">
+                        </td>
+                    </tr>
+                </table>
+                <?php submit_button(__('Save', 'content-quality-guard')); ?>
+            </form>
 
             <h2 class="title"><?php esc_html_e('PageSpeed Insights', 'content-quality-guard'); ?></h2>
             <p class="description">
@@ -385,6 +444,41 @@ final class OverviewPage
         );
     }
 
+    /**
+     * Which subset of the table to show.
+     */
+    private static function filter(): string
+    {
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only.
+        $value = isset($_GET['show']) ? sanitize_key(wp_unslash($_GET['show'])) : '';
+
+        return in_array($value, ['error', 'any', 'clean'], true) ? $value : '';
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $rows
+     * @return array<int,array<string,mixed>>
+     */
+    private static function applyFilter(array $rows): array
+    {
+        $filter = self::filter();
+
+        if ($filter === '') {
+            return $rows;
+        }
+
+        return array_values(array_filter($rows, static function (array $row) use ($filter): bool {
+            $total = (int) $row['error'] + (int) $row['warning'] + (int) $row['notice'];
+
+            return match ($filter) {
+                'error' => (int) $row['error'] > 0,
+                'any'   => $total > 0,
+                'clean' => $total === 0,
+                default => true,
+            };
+        }));
+    }
+
     private static function cell(int $count, string $severity): string
     {
         if ($count === 0) {
@@ -403,11 +497,21 @@ final class OverviewPage
      */
     private static function collect(): array
     {
-        $posts = get_posts([
+        $limit = (int) apply_filters('cqg_overview_limit', 200);
+
+        $query = new \WP_Query([
             'post_type'      => Plugin::instance()->analysedPostTypes(),
             'post_status'    => ['publish', 'draft', 'pending'],
-            'posts_per_page' => 200,
+            'posts_per_page' => $limit,
+            'no_found_rows'  => false,
         ]);
+
+        $posts = $query->posts;
+
+        // Recorded so the screen can say it, rather than showing two hundred
+        // rows and letting a manager believe that is the whole site.
+        self::$shown   = count($posts);
+        self::$matched = (int) $query->found_posts;
 
         $speed = Plugin::instance()->pageSpeed();
         $rows  = [];

@@ -41,6 +41,9 @@ final class Sweep
 
     public const OPTION_LAST_SWEEP = 'cqg_last_sweep';
 
+    /** Who gets the digest, and whether one is sent at all. */
+    public const OPTION_DIGEST = 'cqg_digest_to';
+
     /**
      * How many posts one run re-checks.
      *
@@ -103,8 +106,10 @@ final class Sweep
         }
 
         $totals = self::siteTotals();
+        $before = self::latestHistory();
 
         self::recordHistory($totals);
+        self::sendDigest($totals, $before, $checked);
 
         update_option(self::OPTION_LAST_SWEEP, [
             'at'      => gmdate('Y-m-d H:i:s'),
@@ -117,6 +122,115 @@ final class Sweep
             'never_checked_before' => $first,
             'remaining'            => self::neverChecked(),
         ];
+    }
+
+    /**
+     * The most recent recorded day, before today's is written.
+     *
+     * @return array<string,int>|null
+     */
+    private static function latestHistory(): ?array
+    {
+        $history = self::history(0);
+
+        if ($history === []) {
+            return null;
+        }
+
+        // Today's own entry, if the sweep already ran once today, is not a
+        // useful comparison: it would report the change since this morning
+        // rather than since yesterday.
+        unset($history[gmdate('Y-m-d')]);
+
+        if ($history === []) {
+            return null;
+        }
+
+        return end($history);
+    }
+
+    /**
+     * Emails what changed overnight, when something did.
+     *
+     * The value of a maintenance contract is mostly invisible: things do not
+     * break, and nobody notices. A short note saying two new problems appeared
+     * and were found before anyone reported them is the evidence that the
+     * arrangement is working. Sent only when the picture actually changed, so
+     * it stays worth opening.
+     *
+     * @param array{error:int,warning:int,notice:int,total:int,posts:int,clean:int} $totals
+     * @param array<string,int>|null                                                $previous
+     */
+    private static function sendDigest(array $totals, ?array $previous, int $checked): void
+    {
+        $to = (string) get_option(self::OPTION_DIGEST, '');
+
+        if ($to === '' || !is_email($to)) {
+            return;
+        }
+
+        if ($previous === null) {
+            return;
+        }
+
+        $change = $totals['total'] - (int) ($previous['total'] ?? 0);
+
+        if ($change === 0) {
+            // Nothing changed. A daily email saying so trains the recipient to
+            // filter the address, and then the one that matters is missed too.
+            return;
+        }
+
+        $site = wp_specialchars_decode((string) get_bloginfo('name'), ENT_QUOTES);
+
+        $subject = $change > 0
+            ? sprintf(
+                /* translators: 1: number of new issues, 2: site name. */
+                _n('%1$d new content issue on %2$s', '%1$d new content issues on %2$s', abs($change), 'content-quality-guard'),
+                abs($change),
+                $site
+            )
+            : sprintf(
+                /* translators: 1: number of issues resolved, 2: site name. */
+                _n('%1$d content issue resolved on %2$s', '%1$d content issues resolved on %2$s', abs($change), 'content-quality-guard'),
+                abs($change),
+                $site
+            );
+
+        $lines = [
+            sprintf(
+                /* translators: %d: number of pages rechecked. */
+                __('Overnight check: %d pages rechecked.', 'content-quality-guard'),
+                $checked
+            ),
+            '',
+            sprintf(__('Must fix: %d', 'content-quality-guard'), $totals['error']),
+            sprintf(__('Should fix: %d', 'content-quality-guard'), $totals['warning']),
+            sprintf(__('Could improve: %d', 'content-quality-guard'), $totals['notice']),
+            '',
+            sprintf(
+                /* translators: 1: previous total, 2: current total. */
+                __('Total was %1$d, now %2$d.', 'content-quality-guard'),
+                (int) ($previous['total'] ?? 0),
+                $totals['total']
+            ),
+        ];
+
+        $never = self::neverChecked();
+
+        if ($never > 0) {
+            $lines[] = '';
+            $lines[] = sprintf(
+                /* translators: %d: pages never checked. */
+                __('%d pages have still never been checked, so they are not counted above.', 'content-quality-guard'),
+                $never
+            );
+        }
+
+        $lines[] = '';
+        $lines[] = admin_url('admin.php?page=content-quality');
+
+        wp_mail($to, $subject, implode("\n", $lines));
     }
 
     /**
@@ -187,17 +301,38 @@ final class Sweep
      */
     public static function siteTotals(): array
     {
+        global $wpdb;
+
         $totals = ['error' => 0, 'warning' => 0, 'notice' => 0, 'total' => 0, 'posts' => 0, 'clean' => 0];
 
-        $posts = get_posts([
-            'post_type'      => Plugin::instance()->analysedPostTypes(),
-            'post_status'    => 'publish',
-            'posts_per_page' => -1,
-            'fields'         => 'ids',
-        ]);
+        $types = Plugin::instance()->analysedPostTypes();
 
-        foreach ($posts as $postId) {
-            $summary = get_post_meta($postId, Plugin::META_SUMMARY, true);
+        if ($types === []) {
+            return $totals;
+        }
+
+        // One query for every summary, rather than a meta read per post.
+        //
+        // get_posts with fields => ids does not prime the meta cache, so the
+        // previous loop issued one query per published page: five thousand
+        // pages meant five thousand queries every time the sweep finished or
+        // the overview screen was opened.
+        $placeholders = implode(',', array_fill(0, count($types), '%s'));
+
+        $rows = $wpdb->get_col(
+            $wpdb->prepare(
+                "SELECT m.meta_value
+                 FROM {$wpdb->postmeta} m
+                 INNER JOIN {$wpdb->posts} p ON p.ID = m.post_id
+                 WHERE m.meta_key = %s
+                   AND p.post_status = 'publish'
+                   AND p.post_type IN ({$placeholders})",
+                array_merge([Plugin::META_SUMMARY], $types)
+            )
+        );
+
+        foreach ((array) $rows as $serialised) {
+            $summary = maybe_unserialize($serialised);
 
             if (!is_array($summary)) {
                 continue;

@@ -578,4 +578,188 @@ TestRunner::same(
     count(allIssues($content, []))
 );
 
+// ---------------------------------------------------------------------------
+// Dismissing a check
+// ---------------------------------------------------------------------------
+
+TestRunner::group('Dismissed rules');
+
+/**
+ * Mirrors Plugin::allIssues. A dismissal is per post and per rule, so hiding
+ * one thing does not silence the check everywhere.
+ *
+ * @param array<int,array<string,string>> $issues
+ * @param array<int,string>               $dismissed
+ * @return array<int,array<string,string>>
+ */
+function visibleIssues(array $issues, array $dismissed): array
+{
+    if ($dismissed === []) {
+        return $issues;
+    }
+
+    return array_values(array_filter(
+        $issues,
+        static fn(array $issue): bool => !in_array($issue['rule'] ?? '', $dismissed, true)
+    ));
+}
+
+$found = [
+    ['rule' => 'svg-no-name', 'severity' => 'warning'],
+    ['rule' => 'svg-no-name', 'severity' => 'warning'],
+    ['rule' => 'image-missing-alt', 'severity' => 'error'],
+    ['rule' => 'link-broken', 'severity' => 'error'],
+];
+
+TestRunner::same('nothing dismissed shows everything', 4, count(visibleIssues($found, [])));
+
+TestRunner::same(
+    'dismissing a rule hides every instance of it',
+    2,
+    count(visibleIssues($found, ['svg-no-name']))
+);
+
+TestRunner::same(
+    'other rules are untouched',
+    'image-missing-alt',
+    visibleIssues($found, ['svg-no-name'])[0]['rule']
+);
+
+TestRunner::same(
+    'dismissing two rules hides both',
+    1,
+    count(visibleIssues($found, ['svg-no-name', 'image-missing-alt']))
+);
+
+TestRunner::same(
+    'an unknown rule hides nothing',
+    4,
+    count(visibleIssues($found, ['no-such-rule']))
+);
+
+TestRunner::group('Summary follows the visible set');
+
+/**
+ * @param array<int,array<string,string>> $issues
+ * @return array<string,int>
+ */
+function summarise(array $issues): array
+{
+    $summary = ['error' => 0, 'warning' => 0, 'notice' => 0, 'total' => count($issues)];
+
+    foreach ($issues as $issue) {
+        $severity = $issue['severity'] ?? 'notice';
+
+        if (isset($summary[$severity])) {
+            $summary[$severity]++;
+        }
+    }
+
+    return $summary;
+}
+
+$visible = visibleIssues($found, ['svg-no-name']);
+$summary = summarise($visible);
+
+// A panel saying "no problems" beside a table saying "3 must fix" is a bug
+// report waiting to happen, so the counted set has to be the shown set.
+TestRunner::same('the total counts only what is shown', 2, $summary['total']);
+TestRunner::same('severities count only what is shown', 0, $summary['warning']);
+TestRunner::same('errors are still counted', 2, $summary['error']);
+
+// ---------------------------------------------------------------------------
+// Overview filtering
+// ---------------------------------------------------------------------------
+
+TestRunner::group('Overview filter');
+
+/**
+ * @param array<int,array<string,int>> $rows
+ * @return array<int,array<string,int>>
+ */
+function filterRows(array $rows, string $filter): array
+{
+    if ($filter === '') {
+        return $rows;
+    }
+
+    return array_values(array_filter($rows, static function (array $row) use ($filter): bool {
+        $total = $row['error'] + $row['warning'] + $row['notice'];
+
+        return match ($filter) {
+            'error' => $row['error'] > 0,
+            'any'   => $total > 0,
+            'clean' => $total === 0,
+            default => true,
+        };
+    }));
+}
+
+$table = [
+    ['id' => 1, 'error' => 2, 'warning' => 1, 'notice' => 0],
+    ['id' => 2, 'error' => 0, 'warning' => 3, 'notice' => 1],
+    ['id' => 3, 'error' => 0, 'warning' => 0, 'notice' => 0],
+];
+
+TestRunner::same('no filter shows everything', 3, count(filterRows($table, '')));
+TestRunner::same('must fix shows only blocking pages', 1, count(filterRows($table, 'error')));
+TestRunner::same('anything to fix excludes clean pages', 2, count(filterRows($table, 'any')));
+TestRunner::same('clean shows only clean pages', 1, count(filterRows($table, 'clean')));
+TestRunner::same('clean picks the right page', 3, filterRows($table, 'clean')[0]['id']);
+
+// ---------------------------------------------------------------------------
+// Digest
+// ---------------------------------------------------------------------------
+
+TestRunner::group('Overnight digest');
+
+/**
+ * Mirrors Sweep::sendDigest's decision. Sent only when the picture changed:
+ * a daily email saying nothing happened trains the recipient to filter the
+ * address, and then the one that matters is missed too.
+ */
+function shouldSendDigest(?string $to, ?array $previous, int $currentTotal): bool
+{
+    if ($to === null || $to === '') {
+        return false;
+    }
+
+    if ($previous === null) {
+        return false;
+    }
+
+    return $currentTotal !== (int) ($previous['total'] ?? 0);
+}
+
+TestRunner::assert('no address means no email', !shouldSendDigest('', ['total' => 5], 9));
+TestRunner::assert('no history means no comparison and no email', !shouldSendDigest('a@b.ie', null, 9));
+TestRunner::assert('no change means no email', !shouldSendDigest('a@b.ie', ['total' => 9], 9));
+TestRunner::assert('new issues are worth an email', shouldSendDigest('a@b.ie', ['total' => 5], 9));
+TestRunner::assert('resolved issues are worth an email too', shouldSendDigest('a@b.ie', ['total' => 9], 5));
+
+// ---------------------------------------------------------------------------
+// Page speed metrics
+// ---------------------------------------------------------------------------
+
+TestRunner::group('Speed metrics');
+
+/**
+ * Layout shift is a ratio, not a duration, so it must not be divided by a
+ * thousand along with the timings.
+ *
+ * @return array{seconds:float|null,ratio:float|null}
+ */
+function speedMetric(float $numeric, bool $isDuration): array
+{
+    return [
+        'seconds' => $isDuration ? round($numeric / 1000, 2) : null,
+        'ratio'   => $isDuration ? null : round($numeric, 3),
+    ];
+}
+
+TestRunner::same('a timing is converted to seconds', 2.4, speedMetric(2400.0, true)['seconds']);
+TestRunner::same('a timing has no ratio', null, speedMetric(2400.0, true)['ratio']);
+TestRunner::same('layout shift keeps its value', 0.082, speedMetric(0.0821, false)['ratio']);
+TestRunner::same('layout shift is not a duration', null, speedMetric(0.0821, false)['seconds']);
+
 exit(TestRunner::summary());

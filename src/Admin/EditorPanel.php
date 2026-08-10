@@ -29,15 +29,54 @@ final class EditorPanel
         $issues = Plugin::instance()->allIssues($post->ID);
         $issues = is_array($issues) ? $issues : [];
 
-        $speed = Plugin::instance()->pageSpeed()->lastResult($post->ID);
+        $dismissed = Plugin::instance()->dismissedRules($post->ID);
+        $speed     = Plugin::instance()->pageSpeed()->lastResult($post->ID);
 
         echo '<div class="cqg-panel" data-post="' . (int) $post->ID . '">';
 
         self::renderScore($issues);
         self::renderIssues($issues);
+        self::renderDismissed($post->ID, $dismissed);
         self::renderSpeed($speed);
 
         echo '</div>';
+    }
+
+    /**
+     * What has been hidden on this page, and how to bring it back.
+     *
+     * Listed rather than forgotten: a dismissal that cannot be found again is
+     * indistinguishable from a check that silently stopped working.
+     *
+     * @param array<int,string> $dismissed
+     */
+    private static function renderDismissed(int $postId, array $dismissed): void
+    {
+        if ($dismissed === []) {
+            return;
+        }
+
+        echo '<details class="cqg-dismissed"><summary>';
+
+        printf(
+            esc_html(
+                /* translators: %d: number of hidden checks. */
+                _n('%d check hidden on this page', '%d checks hidden on this page', count($dismissed), 'content-quality-guard')
+            ),
+            count($dismissed)
+        );
+
+        echo '</summary><ul>';
+
+        foreach ($dismissed as $rule) {
+            printf(
+                '<li><code>%s</code> <button type="button" class="button-link cqg-issue__restore" data-rule="%1$s">%s</button></li>',
+                esc_html($rule),
+                esc_html__('Show again', 'content-quality-guard')
+            );
+        }
+
+        echo '</ul></details>';
     }
 
     /**
@@ -149,6 +188,18 @@ final class EditorPanel
 
             if (!empty($issue['standard'])) {
                 printf('<p class="cqg-issue__standard">%s</p>', esc_html($issue['standard']));
+            }
+
+            // Every checker is wrong sometimes: a table used for layout inside
+            // an embed, a heading level the theme dictates. Without a way to
+            // say so, the same wrong answer appears on every visit and the
+            // panel stops being read at all.
+            if (!empty($issue['rule'])) {
+                printf(
+                    '<button type="button" class="button-link cqg-issue__dismiss" data-rule="%s">%s</button>',
+                    esc_attr($issue['rule']),
+                    esc_html__('Not relevant here', 'content-quality-guard')
+                );
             }
 
             echo '</li>';

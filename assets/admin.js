@@ -99,3 +99,52 @@
         }
     });
 }());
+
+    /**
+     * Hiding and restoring a check.
+     *
+     * Bound to the panel rather than to each button, so a redraw after a
+     * recheck does not leave dead handlers behind.
+     */
+    (function () {
+        var panel = document.querySelector('.cqg-panel');
+
+        if (!panel) {
+            return;
+        }
+
+        panel.addEventListener('click', function (event) {
+            var button = event.target.closest('.cqg-issue__dismiss, .cqg-issue__restore');
+
+            if (!button) {
+                return;
+            }
+
+            var restore = button.classList.contains('cqg-issue__restore');
+
+            button.disabled = true;
+
+            fetch(cqgAdmin.root + '/dismiss/' + panel.dataset.post, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'X-WP-Nonce': cqgAdmin.nonce,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ rule: button.dataset.rule, restore: restore })
+            })
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error('failed');
+                    }
+
+                    // The panel is rendered server side, so reloading it is
+                    // simpler and less likely to drift than rebuilding the
+                    // list here from the response.
+                    window.location.reload();
+                })
+                .catch(function () {
+                    button.disabled = false;
+                });
+        });
+    }());

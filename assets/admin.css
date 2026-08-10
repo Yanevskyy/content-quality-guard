@@ -230,3 +230,38 @@
 .cqg-chart-data table {
     margin-top: 8px;
 }
+
+/* Dismissing a check ------------------------------------------------------ */
+
+.cqg-issue__dismiss,
+.cqg-issue__restore {
+    font-size: 11px;
+    color: #50575e;
+}
+
+.cqg-issue__dismiss:hover,
+.cqg-issue__restore:hover {
+    color: #2271b1;
+}
+
+.cqg-dismissed {
+    margin-top: 10px;
+    font-size: 12px;
+}
+
+.cqg-dismissed summary {
+    color: #50575e;
+    cursor: pointer;
+}
+
+.cqg-dismissed ul {
+    margin: 6px 0 0;
+    padding-left: 14px;
+}
+
+.cqg-table-filters {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 12px 0;
+}
